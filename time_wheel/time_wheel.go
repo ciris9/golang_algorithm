@@ -1,20 +1,25 @@
-package time_wheel
+package timewheel
 
 import (
 	"container/list"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
 
 type TimeWheel struct {
-	interval    time.Duration
-	slotNums    int
-	currentPos  int
-	ticker      *time.Ticker
-	slots       []*list.List
-	taskRecords *sync.Map
-	isRunning   bool
+	interval          time.Duration
+	slots             []*list.List
+	ticker            *time.Ticker
+	currentPos        int
+	slotNums          int
+	addTaskChannel    chan *Task
+	removeTaskChannel chan *Task
+	stopChannel       chan bool
+	taskRecords       *sync.Map
+	job               Job
+	isRunning         bool
 }
 
 type Job func(interface{})
@@ -29,10 +34,104 @@ type Task struct {
 	times       int
 }
 
+var tw *TimeWheel
+var once sync.Once
+
+// ErrDuplicateTaskKey is an error for duplicate task key
+var ErrDuplicateTaskKey = errors.New("Duplicate task key")
+
+// ErrTaskKeyNotFount is an error when task key is not found
+var ErrTaskKeyNotFount = errors.New("Task key doesn't existed in task list, please check your input")
+
+func CreateTimeWheel(interval time.Duration, slotNums int, job Job) *TimeWheel {
+	once.Do(func() {
+		tw = New(interval, slotNums, job)
+	})
+	return tw
+}
+
+func GetTimeWheel() *TimeWheel {
+	return tw
+}
+
+func New(interval time.Duration, slotNums int, job Job) *TimeWheel {
+	if interval <= 0 || slotNums <= 0 {
+		return nil
+	}
+	tw := &TimeWheel{
+		interval:          interval,
+		slots:             make([]*list.List, slotNums),
+		currentPos:        0,
+		slotNums:          slotNums,
+		addTaskChannel:    make(chan *Task),
+		removeTaskChannel: make(chan *Task),
+		stopChannel:       make(chan bool),
+		taskRecords:       &sync.Map{},
+		job:               job,
+		isRunning:         false,
+	}
+
+	tw.initSlots()
+	return tw
+}
+
 func (tw *TimeWheel) Start() {
 	tw.ticker = time.NewTicker(tw.interval)
 	go tw.start()
 	tw.isRunning = true
+}
+
+func (tw *TimeWheel) Stop() {
+	tw.stopChannel <- true
+	tw.isRunning = false
+}
+
+func (tw *TimeWheel) IsRunning() bool {
+	return tw.isRunning
+}
+
+func (tw *TimeWheel) AddTask(interval time.Duration, key interface{}, createdTime time.Time, times int, job Job) error {
+	if interval <= 0 || key == nil {
+		return errors.New("Invalid task params")
+	}
+
+	// 检查Task.Key是否已经存在
+	_, ok := tw.taskRecords.Load(key)
+	if ok {
+		return ErrDuplicateTaskKey
+	}
+
+	tw.addTaskChannel <- &Task{
+		key:         key,
+		interval:    interval,
+		createdTime: createdTime,
+		job:         job,
+		times:       times,
+	}
+
+	return nil
+}
+
+func (tw *TimeWheel) RemoveTask(key interface{}) error {
+	if key == nil {
+		return nil
+	}
+
+	// 检查该Task是否存在
+	val, ok := tw.taskRecords.Load(key)
+	if !ok {
+		return ErrTaskKeyNotFount
+	}
+
+	task := val.(*list.Element).Value.(*Task)
+	tw.removeTaskChannel <- task
+	return nil
+}
+
+func (tw *TimeWheel) initSlots() {
+	for i := 0; i < tw.slotNums; i++ {
+		tw.slots[i] = list.New()
+	}
 }
 
 func (tw *TimeWheel) start() {
@@ -40,63 +139,15 @@ func (tw *TimeWheel) start() {
 		select {
 		case <-tw.ticker.C:
 			tw.checkAndRunTask()
+		case task := <-tw.addTaskChannel:
+			tw.addTask(task, false)
+		case task := <-tw.removeTaskChannel:
+			tw.removeTask(task)
+		case <-tw.stopChannel:
+			tw.ticker.Stop()
+			return
 		}
 	}
-}
-
-// 添加任务的内部函数
-// @param task       Task  Task对象
-// @param byInterval bool  生成Task在时间轮盘位置和圈数的方式，true表示利用Task.interval来生成，false表示利用Task.createTime生成
-func (tw *TimeWheel) addTask(task *Task, byInterval bool) {
-	var pos, circle int
-	if byInterval {
-		pos, circle = tw.getPosAndCircleByInterval(task.interval)
-	} else {
-		pos, circle = tw.getPosAndCircleByCreatedTime(task.createdTime, task.interval, task.key)
-	}
-
-	task.circle = circle
-	task.pos = pos
-
-	element := tw.slots[pos].PushBack(task)
-	tw.taskRecords.Store(task.key, element)
-}
-
-func (tw *TimeWheel) getPosAndCircleByInterval(d time.Duration) (int, int) {
-	delaySeconds := int(d.Seconds())
-	intervalSeconds := int(tw.interval.Seconds())
-	circle := delaySeconds / intervalSeconds / tw.slotNums
-	pos := (tw.currentPos + delaySeconds/intervalSeconds) % tw.slotNums
-
-	// 计算的位置和当前位置重叠时，因为当前位置已经走过了，circle需要减一
-	if pos == tw.currentPos && circle != 0 {
-		circle--
-	}
-	return pos, circle
-}
-
-func (tw *TimeWheel) getPosAndCircleByCreatedTime(createdTime time.Time, d time.Duration, key interface{}) (int, int) {
-
-	passedTime := time.Since(createdTime)
-	passedSeconds := int(passedTime.Seconds())
-	delaySeconds := int(d.Seconds())
-	intervalSeconds := int(tw.interval.Seconds())
-
-	circle := delaySeconds / intervalSeconds / tw.slotNums
-	pos := (tw.currentPos + (delaySeconds-(passedSeconds%delaySeconds))/intervalSeconds) % tw.slotNums
-
-	// 计算的位置和当前位置重叠时，因为当前位置已经走过了，circle需要减一
-	if pos == tw.currentPos && circle != 0 {
-		circle--
-	}
-	return pos, circle
-}
-
-func (tw *TimeWheel) removeTask(task *Task) {
-	val, _ := tw.taskRecords.Load(task.key)
-	tw.taskRecords.Delete(task.key)
-	currentList := tw.slots[task.pos]
-	currentList.Remove(val.(*list.Element))
 }
 
 func (tw *TimeWheel) checkAndRunTask() {
@@ -113,6 +164,8 @@ func (tw *TimeWheel) checkAndRunTask() {
 
 			if task.job != nil {
 				go task.job(task.key)
+			} else if tw.job != nil {
+				go tw.job(task.key)
 			} else {
 				fmt.Println(fmt.Sprintf("The task %d don't have job to run", task.key))
 			}
@@ -120,7 +173,6 @@ func (tw *TimeWheel) checkAndRunTask() {
 			next := item.Next()
 			tw.taskRecords.Delete(task.key)
 			currentList.Remove(item)
-
 			item = next
 
 			if task.times != 0 {
@@ -131,8 +183,6 @@ func (tw *TimeWheel) checkAndRunTask() {
 					tw.addTask(task, true)
 				}
 
-			} else {
-				tw.taskRecords.Delete(task.key)
 			}
 		}
 	}
@@ -142,4 +192,54 @@ func (tw *TimeWheel) checkAndRunTask() {
 	} else {
 		tw.currentPos++
 	}
+}
+
+func (tw *TimeWheel) addTask(task *Task, byInterval bool) {
+	var pos, circle int
+	if byInterval {
+		pos, circle = tw.getPosAndCircleByInterval(task.interval)
+	} else {
+		pos, circle = tw.getPosAndCircleByCreatedTime(task.createdTime, task.interval, task.key)
+	}
+
+	task.circle = circle
+	task.pos = pos
+
+	element := tw.slots[pos].PushBack(task)
+	tw.taskRecords.Store(task.key, element)
+}
+
+func (tw *TimeWheel) removeTask(task *Task) {
+	val, _ := tw.taskRecords.Load(task.key)
+	tw.taskRecords.Delete(task.key)
+
+	currentList := tw.slots[task.pos]
+	currentList.Remove(val.(*list.Element))
+}
+
+func (tw *TimeWheel) getPosAndCircleByInterval(d time.Duration) (int, int) {
+	delaySeconds := int(d.Seconds())
+	intervalSeconds := int(tw.interval.Seconds())
+	circle := delaySeconds / intervalSeconds / tw.slotNums
+	pos := (tw.currentPos + delaySeconds/intervalSeconds) % tw.slotNums
+	if pos == tw.currentPos && circle != 0 {
+		circle--
+	}
+	return pos, circle
+}
+
+func (tw *TimeWheel) getPosAndCircleByCreatedTime(createdTime time.Time, d time.Duration, key interface{}) (int, int) {
+	passedTime := time.Since(createdTime)
+	passedSeconds := int(passedTime.Seconds())
+	delaySeconds := int(d.Seconds())
+	intervalSeconds := int(tw.interval.Seconds())
+
+	circle := delaySeconds / intervalSeconds / tw.slotNums
+	pos := (tw.currentPos + (delaySeconds-(passedSeconds%delaySeconds))/intervalSeconds) % tw.slotNums
+
+	if pos == tw.currentPos && circle != 0 {
+		circle--
+	}
+
+	return pos, circle
 }
