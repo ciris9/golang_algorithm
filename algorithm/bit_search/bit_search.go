@@ -1,4 +1,4 @@
-package array
+package bit_search
 
 import "cmp"
 
