@@ -1,4 +1,32 @@
-package mian
+package one
+
+var one_ans = make([]int, 0)
+var isOk = make([]bool, 0)
+var ans = make([][]int, 0)
+
+func permute(nums []int) [][]int {
+	isOk = make([]bool, len(nums))
+	one_ans = make([]int, 0)
+	ans = make([][]int, 0)
+	dfs(0, nums)
+	return ans
+}
+
+func dfs(index int, nums []int) {
+	if index == len(nums) {
+		ans = append(ans, append([]int(nil), one_ans...))
+		return
+	}
+	for i := 0; i < len(nums); i++ {
+		if !isOk[i] {
+			one_ans = append(one_ans, nums[i])
+			isOk[i] = true
+			dfs(index+1, nums)
+			one_ans = one_ans[:len(one_ans)-1]
+			isOk[i] = false
+		}
+	}
+}
 
 func sortColors(nums []int) {
 	left, right := 0, len(nums)-1
