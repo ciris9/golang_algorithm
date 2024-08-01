@@ -1,60 +1,33 @@
 package graph
 
 import (
-	"algorithm/data_structure/graph"
-	"fmt"
 	"math"
 )
 
-func BellmanFord(g *graph.Graph, source int) ([]float64, []int) {
-	dist := make([]float64, g.Vertices)
-	prev := make([]int, g.Vertices)
-	for i := 0; i < g.Vertices; i++ {
-		dist[i] = math.Inf(1) // 将所有节点的距离设为 无穷大
-		prev[i] = -1          // 保存到节点v最短距离，到v的上一跳是哪个节点
+// BellmanFord 执行 Bellman-Ford 算法计算单源最短路径
+func BellmanFord(g *Graph, source int) ([]int, bool) {
+	// 初始化距离数组，将所有距离设置为正无穷
+	dist := make([]int, g.Vertices)
+	for i := range dist {
+		dist[i] = math.MaxInt32
 	}
-	dist[source] = 0 // 起点的距离为 0
+	dist[source] = 0 // 源点到自身的距离为 0
 
-	// Relax Edges V - 1 times（i 从 1 开始计数）
-	for i := 1; i < g.Vertices; i++ {
-		for _, edge := range g.Edges {
-			u := edge.Src
-			v := edge.Dest
-			w := edge.Weight
-			if dist[u]+w < dist[v] {
-				dist[v] = dist[u] + w
-				prev[v] = u
+	// 进行 V-1 次迭代，更新每个顶点的最短距离
+	for i := 0; i < g.Vertices-1; i++ {
+		for _, e := range g.Edges {
+			if dist[e.Source]+e.Weight < dist[e.Dest] {
+				dist[e.Dest] = dist[e.Source] + e.Weight
 			}
 		}
 	}
 
-	// Check for negative cycle，经过了 v-1 次循环了，还是存在更短的路径证明存在负环了
-	for _, edge := range g.Edges {
-		u := edge.Src
-		v := edge.Dest
-		w := edge.Weight
-		if dist[u]+w < dist[v] {
-			fmt.Println("Graph contains a negative weight cycle")
-			return nil, nil
+	// 检查是否存在负权重环
+	for _, e := range g.Edges {
+		if dist[e.Source]+e.Weight < dist[e.Dest] {
+			return nil, false // 存在负权重环
 		}
 	}
 
-	return dist, prev
-}
-
-func PrintShortestPaths(dist []float64, prev []int, source int) {
-	fmt.Println("Shortest Paths from vertex", source)
-	for i := 0; i < len(dist); i++ {
-		if dist[i] == math.Inf(1) {
-			fmt.Printf("Vertex %d is not reachable\n", i)
-		} else {
-			var path []int
-			j := i
-			for j != -1 {
-				path = append([]int{j}, path...)
-				j = prev[j]
-			}
-			fmt.Printf("Vertex %d: Distance=%f, Path=%v\n", i, dist[i], path)
-		}
-	}
+	return dist, true
 }

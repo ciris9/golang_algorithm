@@ -1,35 +1,79 @@
 package graph
 
-import "math"
+import (
+	"container/heap"
+	"math"
+)
 
-var edge [2505][2505]int
-var dis [2505]int
-var book [2505]int
-var n, s int
-var inf = math.MaxInt/2 - 1
+// PriorityQueue 用于实现 Dijkstra 算法
+type PriorityQueue []*Vertex
 
-func Dijkstra() {
-	for i := 1; i <= n; i++ {
-		dis[i] = edge[s][i]
+type Vertex struct {
+	ID    int
+	Dist  int
+	Prev  *Vertex
+	Index int // 用于在 PriorityQueue 中的索引
+}
+
+func (pq PriorityQueue) Len() int { return len(pq) }
+
+func (pq PriorityQueue) Less(i, j int) bool {
+	return pq[i].Dist < pq[j].Dist
+}
+
+func (pq PriorityQueue) Swap(i, j int) {
+	pq[i], pq[j] = pq[j], pq[i]
+	pq[i].Index = i
+	pq[j].Index = j
+}
+
+func (pq *PriorityQueue) Push(x interface{}) {
+	n := len(*pq)
+	v := x.(*Vertex)
+	v.Index = n
+	*pq = append(*pq, v)
+}
+
+func (pq *PriorityQueue) Pop() interface{} {
+	old := *pq
+	n := len(old)
+	v := old[n-1]
+	v.Index = -1 // for safety
+	*pq = old[0 : n-1]
+	return v
+}
+
+func Dijkstra(g *Graph, source int) []*Vertex {
+	dist := make([]*Vertex, g.Vertices)
+	for i := range dist {
+		dist[i] = &Vertex{ID: i, Dist: math.MaxInt32, Prev: nil}
 	}
-	book[s] = 1
-	for i := 1; i <= n-1; i++ {
-		var minn int = inf
-		var nextPos int = -1
-		for j := 1; j <= n; j++ {
-			if book[j] == 0 && dis[j] < minn {
-				nextPos = j
-				minn = dis[j]
-			}
-		}
-		if nextPos == -1 {
+	dist[source] = &Vertex{ID: source, Dist: 0, Prev: nil}
+	pq := make(PriorityQueue, 0, g.Vertices)
+	heap.Init(&pq)
+	heap.Push(&pq, dist[source])
+
+	for pq.Len() > 0 {
+		u := heap.Pop(&pq).(*Vertex)
+		if u.Dist == math.MaxInt32 {
 			break
 		}
-		book[nextPos] = 1
-		for j := 1; j <= n; j++ {
-			if book[j] == 0 && dis[nextPos]+edge[nextPos][j] < dis[j] {
-				dis[j] = dis[nextPos] + edge[nextPos][j]
+
+		for _, e := range g.Edges {
+			if e.Source == u.ID {
+				v := dist[e.Dest]
+				if v.Dist > u.Dist+e.Weight {
+					v.Dist = u.Dist + e.Weight
+					v.Prev = u
+					if v.Index != -1 {
+						heap.Fix(&pq, v.Index)
+					} else {
+						heap.Push(&pq, v)
+					}
+				}
 			}
 		}
 	}
+
+	return dist
 }
